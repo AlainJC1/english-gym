@@ -61,42 +61,88 @@ export function micErrorText(err) {
   return 'Could not start the microphone' + (n ? ' (' + n + ')' : '') + '.';
 }
 
+// Records with the Web Audio API and saves a WAV file. iPhone home-screen apps can return
+// empty files from MediaRecorder, but raw audio capture works reliably there.
+const OUT_RATE = 16000;
 export class Recorder {
   async start() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) throw new Error('Recording is not supported here.');
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Recording is not supported here.');
     stopSpeaking(); stopPlayback();
     setAudioSession('play-and-record');
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const types = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
-    const type = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
-    try { this.mr = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined); }
-    catch (e) { this.mr = new MediaRecorder(this.stream); }
-    this.chunks = [];
-    this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
+    // Create and resume the audio context inside the tap, before any await.
+    this.ctx = new AC();
+    const resumed = this.ctx.resume().catch(() => {});
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) { this.closeCtx(); setAudioSession('playback'); throw e; }
+    await resumed;
+    if (this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) { /* ignore */ } }
+    this.rate = this.ctx.sampleRate;
+    this.buffers = []; this.samples = 0; this.peak = 0;
+    this.src = this.ctx.createMediaStreamSource(this.stream);
+    this.proc = this.ctx.createScriptProcessor(4096, 1, 1);
+    this.mute = this.ctx.createGain(); this.mute.gain.value = 0;
+    this.proc.onaudioprocess = e => {
+      if (!this.recording) return;
+      const d = new Float32Array(e.inputBuffer.getChannelData(0));
+      for (let i = 0; i < d.length; i += 16) { const a = Math.abs(d[i]); if (a > this.peak) this.peak = a; }
+      this.buffers.push(d); this.samples += d.length;
+    };
+    this.src.connect(this.proc); this.proc.connect(this.mute); this.mute.connect(this.ctx.destination);
+    this.recording = true;
     this.t0 = Date.now();
-    // No timeslice: Safari writes one complete, playable file when it stops.
-    this.mr.start();
   }
-  get active() { return !!this.mr && this.mr.state === 'recording'; }
+  get active() { return !!this.recording; }
   elapsed() { return this.t0 ? Date.now() - this.t0 : 0; }
-  stop() {
-    return new Promise(resolve => {
-      if (!this.mr || this.mr.state === 'inactive') { this.release(); resolve(null); return; }
-      let done = false;
-      const finish = () => {
-        if (done) return; done = true;
-        const blob = new Blob(this.chunks, { type: (this.mr.mimeType || 'audio/mp4').split(';')[0] });
-        this.release();
-        resolve(blob.size ? { blob, ms: Date.now() - this.t0 } : null);
-      };
-      this.mr.onstop = () => setTimeout(finish, 50); // let the last dataavailable land
-      try { this.mr.requestData && this.mr.state === 'recording' && this.mr.requestData(); } catch (e) { /* ignore */ }
-      this.mr.stop();
-      setTimeout(finish, 3000);
-    });
+  get state() { return this.ctx ? this.ctx.state : 'none'; }
+  async stop() {
+    if (!this.recording) { this.release(); return null; }
+    this.recording = false;
+    const ms = Date.now() - this.t0;
+    const info = { samples: this.samples, peak: this.peak, ctx: this.state };
+    this.release();
+    this.lastInfo = info;
+    if (this.samples < this.rate * 0.3) return null;
+    const blob = encodeWav(this.buffers, this.samples, this.rate);
+    this.buffers = [];
+    return { blob, ms, peak: info.peak };
   }
-  release() { if (this.stream) this.stream.getTracks().forEach(t => t.stop()); this.stream = null; setAudioSession('playback'); }
-  cancel() { try { if (this.mr && this.mr.state !== 'inactive') { this.mr.onstop = null; this.mr.stop(); } } catch (e) { /* ignore */ } this.release(); }
+  closeCtx() { try { if (this.ctx && this.ctx.state !== 'closed') this.ctx.close(); } catch (e) { /* ignore */ } this.ctx = null; }
+  release() {
+    try { if (this.src) this.src.disconnect(); if (this.proc) { this.proc.disconnect(); this.proc.onaudioprocess = null; } if (this.mute) this.mute.disconnect(); } catch (e) { /* ignore */ }
+    if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+    this.stream = null; this.src = this.proc = this.mute = null;
+    this.closeCtx();
+    setAudioSession('playback');
+  }
+  cancel() { this.recording = false; this.buffers = []; this.release(); }
+}
+
+function encodeWav(buffers, total, inRate) {
+  const ratio = inRate / OUT_RATE;
+  const outLen = Math.floor(total / ratio);
+  const pcm = new Int16Array(outLen);
+  // Flatten lazily while averaging each output sample's input window (simple low-pass + decimate).
+  let bi = 0, bo = 0, pos = 0;
+  const read = () => { while (bi < buffers.length && bo >= buffers[bi].length) { bi++; bo = 0; } return bi < buffers.length ? buffers[bi][bo++] : 0; };
+  let consumed = 0;
+  for (let i = 0; i < outLen; i++) {
+    const target = Math.floor((i + 1) * ratio);
+    let sum = 0, n = 0;
+    while (consumed < target) { sum += read(); n++; consumed++; }
+    const v = n ? sum / n : 0;
+    pcm[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+  }
+  pos = 44 + pcm.length * 2;
+  const buf = new ArrayBuffer(pos), dv = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, OUT_RATE, true); dv.setUint32(28, OUT_RATE * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  str(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: 'audio/wav' });
 }
 
 let player = null, playerUrl = null;

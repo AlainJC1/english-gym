@@ -347,10 +347,12 @@ async function micTest(box, btn) {
   for (let i = 4; i > 0; i--) { res.textContent = 'Recording… speak now (' + i + ')'; await new Promise(r => setTimeout(r, 1000)); }
   const r = await rec.stop();
   btn.disabled = false;
-  if (!r) { res.textContent = 'The microphone opened but nothing was recorded. Close the app completely (swipe it up) and try again.'; return; }
+  const info = rec.lastInfo || {};
+  if (!r) { res.textContent = 'Nothing was recorded (audio engine: ' + (info.ctx || '?') + ', samples: ' + (info.samples || 0) + '). Close the app completely (swipe it up), open it again and retry. Send Claude this message if it repeats.'; return; }
   box._micBlob = r.blob;
   box.querySelector('[data-a="replay"]').hidden = false;
-  res.textContent = 'Recorded ' + Math.round(r.blob.size / 1024) + ' KB (' + (r.blob.type || 'unknown type') + '). Playing it back… If you hear nothing, check that the volume is up.';
+  const level = Math.min(100, Math.round(r.peak * 100));
+  res.textContent = 'Recorded ' + Math.round(r.ms / 1000) + ' s, level ' + level + '%' + (level < 2 ? ' (silent: the microphone gave no sound)' : '') + '. Playing it back… If you hear nothing, turn the volume up.';
   const ok = await playBlob(r.blob);
   if (!ok) res.textContent += ' Playback failed on this device.';
 }

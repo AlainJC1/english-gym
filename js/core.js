@@ -5,7 +5,7 @@ import { DECK, DECK_VERSION } from '../data/deck.js';
 import { speak, stopSpeaking } from './audio.js';
 import { startOfDay, endOfDay } from './fsrs.js';
 
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 export const CAT = Object.fromEntries(CATS.map(c => [c.id, c]));
 export const DEFAULTS = { startDate: '2026-11-09', commute: 'car', newPerDay: 10, voiceURI: '', rate: 0.95, autoplay: true, ai: 'claude' };
 export const S = { settings: Object.assign({}, DEFAULTS), log: [], cards: [], phrases: [], mistakes: [], tests: [], revlog: {}, timer: null, stats: {}, custom: [] };

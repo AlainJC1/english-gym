@@ -225,7 +225,7 @@ function recs(box) {
     if (!r) return;
     if (b.dataset.a === 'play') playBlob(r.blob);
     else if (b.dataset.a === 'share') {
-      const ext = /webm/.test(r.type) ? 'webm' : 'm4a';
+      const ext = /wav/.test(r.type) ? 'wav' : /webm/.test(r.type) ? 'webm' : 'm4a';
       const file = new File([r.blob], r.title.replace(/[^\w\- ]+/g, '').slice(0, 50) + '.' + ext, { type: r.type || 'audio/mp4' });
       if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: r.title }); } catch (err) { /* cancelled */ } }
       else toast('Sharing is not available here.');
