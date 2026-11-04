@@ -61,4 +61,5 @@ function registerSW() {
 }
 
 window.addEventListener('error', e => console.error(e.error || e.message));
+window.addEventListener('eg:playerror', () => toast('Could not play the recording. Tap Play again.'));
 init();

@@ -28,6 +28,7 @@ export function speak(text, opts = {}) {
   return new Promise(resolve => {
     if (!('speechSynthesis' in window) || !text) { resolve(false); return; }
     const my = ++speakSeq;
+    setAudioSession('playback');
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     const v = opts.voice || pickVoice(opts.voiceURI);
@@ -45,32 +46,56 @@ export function speak(text, opts = {}) {
 }
 export function stopSpeaking() { speakSeq++; if ('speechSynthesis' in window) speechSynthesis.cancel(); }
 
+// iOS keeps the audio session in "record" mode after using the mic, which makes playback
+// very quiet or silent. Safari's Audio Session API lets us switch it back.
+export function setAudioSession(type) {
+  try { if (navigator.audioSession) navigator.audioSession.type = type; } catch (e) { /* not supported */ }
+}
+
+export function micErrorText(err) {
+  const n = err && err.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'The microphone is blocked. On your iPhone: Settings › Apps › Safari › Microphone › Allow (or Ask). Then close and reopen the app.';
+  if (n === 'NotFoundError') return 'No microphone was found.';
+  if (n === 'NotReadableError' || n === 'AbortError') return 'The microphone is busy. Close other apps using it (calls, Voice Memos) and try again.';
+  if (err && /not supported/i.test(err.message || '')) return 'Recording is not supported in this browser. Open the app from the Home Screen icon.';
+  return 'Could not start the microphone' + (n ? ' (' + n + ')' : '') + '.';
+}
+
 export class Recorder {
   async start() {
-    if (!navigator.mediaDevices || !window.MediaRecorder) throw new Error('Recording is not supported here.');
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) throw new Error('Recording is not supported here.');
+    stopSpeaking(); stopPlayback();
+    setAudioSession('play-and-record');
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const types = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
     const type = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
-    this.mr = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+    try { this.mr = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined); }
+    catch (e) { this.mr = new MediaRecorder(this.stream); }
     this.chunks = [];
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.t0 = Date.now();
-    this.mr.start(1000);
+    // No timeslice: Safari writes one complete, playable file when it stops.
+    this.mr.start();
   }
   get active() { return !!this.mr && this.mr.state === 'recording'; }
   elapsed() { return this.t0 ? Date.now() - this.t0 : 0; }
   stop() {
     return new Promise(resolve => {
-      if (!this.mr || this.mr.state === 'inactive') { resolve(null); return; }
-      this.mr.onstop = () => {
-        const blob = new Blob(this.chunks, { type: this.mr.mimeType || 'audio/mp4' });
+      if (!this.mr || this.mr.state === 'inactive') { this.release(); resolve(null); return; }
+      let done = false;
+      const finish = () => {
+        if (done) return; done = true;
+        const blob = new Blob(this.chunks, { type: (this.mr.mimeType || 'audio/mp4').split(';')[0] });
         this.release();
-        resolve({ blob, ms: Date.now() - this.t0 });
+        resolve(blob.size ? { blob, ms: Date.now() - this.t0 } : null);
       };
+      this.mr.onstop = () => setTimeout(finish, 50); // let the last dataavailable land
+      try { this.mr.requestData && this.mr.state === 'recording' && this.mr.requestData(); } catch (e) { /* ignore */ }
       this.mr.stop();
+      setTimeout(finish, 3000);
     });
   }
-  release() { if (this.stream) this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+  release() { if (this.stream) this.stream.getTracks().forEach(t => t.stop()); this.stream = null; setAudioSession('playback'); }
   cancel() { try { if (this.mr && this.mr.state !== 'inactive') { this.mr.onstop = null; this.mr.stop(); } } catch (e) { /* ignore */ } this.release(); }
 }
 
@@ -78,12 +103,17 @@ let player = null, playerUrl = null;
 export function playBlob(blob) {
   stopPlayback();
   stopSpeaking();
+  setAudioSession('playback');
+  if (!blob || !blob.size) return Promise.resolve(false);
   playerUrl = URL.createObjectURL(blob);
-  player = new Audio(playerUrl);
+  player = new Audio();
   player.setAttribute('playsinline', '');
-  const p = new Promise(resolve => { player.onended = () => resolve(true); player.onerror = () => resolve(false); });
-  player.play().catch(() => {});
-  return p;
+  player.preload = 'auto';
+  player.volume = 1;
+  player.src = playerUrl;
+  const a = player;
+  const p = new Promise(resolve => { a.onended = () => resolve(true); a.onerror = () => resolve(false); });
+  return a.play().then(() => p, err => { window.dispatchEvent(new CustomEvent('eg:playerror', { detail: err && err.name })); return false; });
 }
 export function stopPlayback() {
   if (player) { try { player.pause(); } catch (e) { /* ignore */ } player = null; }

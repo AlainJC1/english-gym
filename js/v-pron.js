@@ -1,5 +1,5 @@
 import { S, esc, header, say, stopSpeaking, trackStart, trackPing, toast, saveStats, setKV, uid, ask } from './core.js';
-import { enVoices, accentOf, Recorder, playBlob, stopPlayback, speak } from './audio.js';
+import { enVoices, accentOf, Recorder, playBlob, stopPlayback, speak, micErrorText } from './audio.js';
 import { compareWords, sameAnswer } from './text.js';
 import { SHADOW, splitSentences } from '../data/shadow.js';
 import { CONTRASTS, ED_GAME, STRESS, SAY_SETS } from '../data/sounds.js';
@@ -110,8 +110,8 @@ function shadow(box, id) {
     else if (a === 'prev' || a === 'next') { st.echo = false; stopSpeaking(); st.i += a === 'next' ? 1 : -1; box.querySelector('#dict') && (box.querySelector('#dict').value = ''); draw(); }
     else if (a === 'echo') { if (st.echo) { st.echo = false; stopSpeaking(); draw(); } else echo(); }
     else if (a === 'rec') {
-      if (st.rec) { const r = await st.rec.stop(); st.rec = null; if (r) st.mine[st.i] = r.blob; trackPing(); draw(); }
-      else { stopSpeaking(); st.rec = new Recorder(); try { await st.rec.start(); draw(); } catch (err) { st.rec = null; toast('Allow the microphone to record yourself.'); } }
+      if (st.rec) { const r = await st.rec.stop(); st.rec = null; if (r) { st.mine[st.i] = r.blob; playBlob(r.blob); } else toast('Nothing was recorded. Try again and speak for at least a second.'); trackPing(); draw(); }
+      else { stopSpeaking(); st.rec = new Recorder(); try { await st.rec.start(); draw(); } catch (err) { st.rec = null; toast(micErrorText(err)); } }
     }
     else if (a === 'me') playBlob(st.mine[st.i]);
     else if (a === 'cmp') { await playBlob(st.mine[st.i]); await wait(400); say(sents[st.i], { rate: st.rate }); }

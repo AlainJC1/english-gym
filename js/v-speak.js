@@ -1,5 +1,5 @@
 import { S, esc, header, addLog, toast, ask, uid, todayKey, fmtShort, fmtTime, topicNow, trackStart, trackStop } from './core.js';
-import { Recorder, playBlob, stopPlayback, fmtClock } from './audio.js';
+import { Recorder, playBlob, stopPlayback, fmtClock, micErrorText } from './audio.js';
 import { dbAll, dbPut, dbDel } from './db.js';
 import { AI_SCENARIOS, WRITE_PROMPT, SAMPLE_PROMPT, SAMPLE_QUESTIONS, DIARY_PROMPTS } from '../data/content.js';
 import { aiButtons, bindAI, importerHTML, bindImporter, micHint } from './ui.js';
@@ -102,7 +102,7 @@ function fourThreeTwo(box) {
     const t = box.querySelector('#topic'); if (t && t.value.trim()) st.topic = t.value.trim();
     stopPlayback();
     st.rec = new Recorder();
-    try { await st.rec.start(); } catch (e) { st.rec = null; toast('Allow the microphone to record.'); return; }
+    try { await st.rec.start(); } catch (e) { st.rec = null; toast(micErrorText(e)); return; }
     const total = LENGTHS[st.round] * 1000, t0 = Date.now();
     st.left = total; draw();
     st.iv = setInterval(() => {
@@ -117,7 +117,7 @@ function fourThreeTwo(box) {
     clearInterval(st.iv);
     if (!st.rec) return;
     const r = await st.rec.stop(); st.rec = null;
-    if (r) { st.takes.push(r); await addLog('speak', minutesOf(r.ms), 'auto'); }
+    if (r) { st.takes.push(r); await addLog('speak', minutesOf(r.ms), 'auto'); } else toast('Nothing was recorded. Check the microphone in More › Settings › Test microphone.');
     st.round++; draw();
   }
   box.addEventListener('click', async e => {
@@ -153,7 +153,7 @@ function simpleRecorder(box, opts) {
     const a = b.dataset.a;
     if (a === 'start') {
       stopPlayback(); st.rec = new Recorder();
-      try { await st.rec.start(); } catch (err) { st.rec = null; toast('Allow the microphone to record.'); return; }
+      try { await st.rec.start(); } catch (err) { st.rec = null; toast(micErrorText(err)); return; }
       st.take = null; st.saved = false; draw();
       st.iv = setInterval(() => {
         const el = box.querySelector('#clk'); if (el && st.rec) el.textContent = fmtClock(st.rec.elapsed());
@@ -163,7 +163,7 @@ function simpleRecorder(box, opts) {
       clearInterval(st.iv);
       if (!st.rec) return;
       const r = await st.rec.stop(); st.rec = null;
-      if (r) { st.take = r; await addLog('speak', minutesOf(r.ms), 'auto'); }
+      if (r) { st.take = r; await addLog('speak', minutesOf(r.ms), 'auto'); } else toast('Nothing was recorded. Check the microphone in More › Settings › Test microphone.');
       draw();
     } else if (a === 'play' && st.take) playBlob(st.take.blob);
     else if (a === 'save' && st.take) { st.savedRec = await saveRecording(opts.kind, opts.recTitle(), st.take); st.saved = true; toast('Saved in Your recordings.'); draw(); }

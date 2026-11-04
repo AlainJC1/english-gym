@@ -4,7 +4,7 @@ import { dbPut, dbDel, dbClear, dbPutMany, ALL_STORES } from './db.js';
 import { GRAMMAR } from '../data/grammar.js';
 import { GROUPS, CHECKS, MILESTONES, GUIDE, TRANSLATE_PROMPT, AI_SCENARIOS, WRITE_PROMPT, PLAN_DOC_URL } from '../data/content.js';
 import { sameAnswer } from './text.js';
-import { enVoices, accentOf, speak } from './audio.js';
+import { enVoices, accentOf, speak, Recorder, playBlob, micErrorText } from './audio.js';
 import { importerHTML, bindImporter } from './ui.js';
 
 export function renderMore(box, params) {
@@ -305,6 +305,8 @@ function settings(box) {
     '<label class="check"><input type="checkbox" id="ap"' + (cur.autoplay ? ' checked' : '') + '> Play the answer when I flip a card</label>' +
     '<fieldset><legend>AI app</legend><label class="check"><input type="radio" name="ai" value="claude"' + (cur.ai !== 'gemini' ? ' checked' : '') + '> Claude</label><label class="check"><input type="radio" name="ai" value="gemini"' + (cur.ai === 'gemini' ? ' checked' : '') + '> Gemini</label></fieldset>' +
     '<button class="btn primary" type="submit">Save settings</button></form>' +
+    '<section class="card"><h2>Test microphone</h2><p class="hint">Records 4 seconds and plays them back. Say: "Testing, one, two, three."</p>' +
+    '<div class="btnrow"><button class="btn go" data-a="mic">Test microphone</button><button class="btn" data-a="replay" hidden>Play again</button></div><p class="hint" id="micres" aria-live="polite"></p></section>' +
     '<section class="card"><h2>Backup</h2><p class="hint">Your data lives only on this iPhone. Make a backup every week and keep it in Files or iCloud Drive. Recordings are not included.</p>' +
     '<div class="btnrow"><button class="btn primary" data-a="export">Save backup</button><label class="btn" for="imp">Restore backup</label><input id="imp" type="file" accept="application/json,.json" hidden></div>' +
     '<p class="hint" id="pers"></p></section>' +
@@ -329,10 +331,28 @@ function settings(box) {
     if (!b) return;
     const a = b.dataset.a;
     if (a === 'test') speak('Hi Alain! This is how I sound. Let\'s practice your English today.', { voice: vs.find(v => v.voiceURI === box.querySelector('#vc').value), rate: Number(box.querySelector('#rt').value) });
+    else if (a === 'mic') micTest(box, b);
+    else if (a === 'replay' && box._micBlob) playBlob(box._micBlob);
     else if (a === 'export') exportData();
     else if (a === 'update') { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (reg) { await reg.update(); toast(reg.waiting || reg.installing ? 'Update found. Reloading…' : 'You have the latest version.'); if (reg.waiting) { reg.waiting.postMessage('skipWaiting'); setTimeout(() => location.reload(), 900); } } else toast('Updates work once the app is installed.'); }
     else if (a === 'reset' && await ask('Erase all your data from this iPhone? Make a backup first.', 'Erase everything', true)) { for (const s of ALL_STORES) await dbClear(s); location.reload(); }
   });
+}
+
+async function micTest(box, btn) {
+  const res = box.querySelector('#micres');
+  const rec = new Recorder();
+  btn.disabled = true;
+  try { await rec.start(); } catch (e) { res.textContent = micErrorText(e); btn.disabled = false; return; }
+  for (let i = 4; i > 0; i--) { res.textContent = 'Recording… speak now (' + i + ')'; await new Promise(r => setTimeout(r, 1000)); }
+  const r = await rec.stop();
+  btn.disabled = false;
+  if (!r) { res.textContent = 'The microphone opened but nothing was recorded. Close the app completely (swipe it up) and try again.'; return; }
+  box._micBlob = r.blob;
+  box.querySelector('[data-a="replay"]').hidden = false;
+  res.textContent = 'Recorded ' + Math.round(r.blob.size / 1024) + ' KB (' + (r.blob.type || 'unknown type') + '). Playing it back… If you hear nothing, check that the volume is up.';
+  const ok = await playBlob(r.blob);
+  if (!ok) res.textContent += ' Playback failed on this device.';
 }
 
 async function exportData() {
