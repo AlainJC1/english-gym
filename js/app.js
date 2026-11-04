@@ -47,7 +47,7 @@ function registerSW() {
       if (!hadController) return;
       const bar = document.getElementById('update');
       bar.hidden = false;
-      bar.querySelector('button').onclick = () => { wantReload = true; w.postMessage('skipWaiting'); };
+      bar.querySelector('button').onclick = () => { wantReload = true; bar.querySelector('span').textContent = 'Updating…'; w.postMessage('skipWaiting'); setTimeout(() => location.reload(), 2500); };
     };
     if (reg.waiting) offer(reg.waiting);
     reg.addEventListener('updatefound', () => {
